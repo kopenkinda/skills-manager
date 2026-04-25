@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
-import { readFile, readdir, rename, stat } from "node:fs/promises";
+import { lstat, readFile, readlink, readdir, rename, rm, stat, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 type SkillScope = "project" | "global" | "system";
@@ -44,6 +44,11 @@ type UpdateResult = {
   output: string;
   updateCount: number | null;
   updates: Array<{ name: string; source?: string }>;
+};
+
+type SkillSymlink = {
+  path: string;
+  linkTarget: string;
 };
 
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL);
@@ -138,7 +143,21 @@ ipcMain.handle(
       throw new Error(`Target folder already exists: ${nextFolderName}`);
     }
 
-    await rename(currentPath, nextPath);
+    const symlinks = await findSkillSymlinks(currentPath, rootPath);
+    for (const link of symlinks) {
+      const nextLinkPath = resolve(dirname(link.path), nextFolderName);
+      if (nextLinkPath !== link.path && (await pathExistsNoFollow(nextLinkPath))) {
+        throw new Error(`Target symlink already exists: ${nextLinkPath}`);
+      }
+    }
+
+    const changedSymlinks = await renameSkillSymlinks(symlinks, currentPath, nextPath, nextFolderName);
+    try {
+      await rename(currentPath, nextPath);
+    } catch (err) {
+      await restoreSkillSymlinks(changedSymlinks);
+      throw err;
+    }
     return true;
   },
 );
@@ -331,6 +350,185 @@ async function findAgentsFile(dir: string): Promise<string | null> {
 function isInsideOrSame(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !rel.includes(`..${sep}`));
+}
+
+async function findSkillSymlinks(skillPath: string, rootPath: string): Promise<SkillSymlink[]> {
+  const roots = await getCandidateSkillDirs(rootPath);
+  const resolvedSkillPath = resolve(skillPath);
+  const symlinks: SkillSymlink[] = [];
+
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+
+    const entries = await readdir(root, { withFileTypes: true });
+    for (const entry of entries) {
+      const entryPath = join(root, entry.name);
+      const entryStat = await lstat(entryPath);
+      if (!entryStat.isSymbolicLink()) continue;
+
+      const linkTarget = await readlink(entryPath);
+      const absoluteTarget = isAbsolute(linkTarget)
+        ? resolve(linkTarget)
+        : resolve(dirname(entryPath), linkTarget);
+
+      if (absoluteTarget === resolvedSkillPath) {
+        symlinks.push({ path: entryPath, linkTarget });
+      }
+    }
+  }
+
+  return symlinks;
+}
+
+async function getCandidateSkillDirs(rootPath: string): Promise<string[]> {
+  const home = homedir();
+  const dirs = new Set<string>();
+  const projectRoot = getProjectRootFromSkillRoot(rootPath);
+
+  for (const dir of [
+    join(home, ".agents", "skills"),
+    join(home, ".config", "agents", "skills"),
+    join(home, ".codex", "skills"),
+    join(home, ".claude", "skills"),
+    join(home, ".cursor", "skills"),
+    join(home, ".gemini", "antigravity", "skills"),
+    join(home, ".gemini", "skills"),
+    join(home, ".config", "opencode", "skills"),
+    join(home, ".copilot", "skills"),
+  ]) {
+    dirs.add(dir);
+  }
+
+  for (const dir of await discoverSkillDirs(home, 4)) {
+    dirs.add(dir);
+  }
+
+  if (projectRoot) {
+    for (const dir of [
+      join(projectRoot, ".agent", "skills"),
+      join(projectRoot, ".agents", "skills"),
+      join(projectRoot, ".claude", "skills"),
+      join(projectRoot, ".cursor", "skills"),
+      join(projectRoot, ".codex", "skills"),
+    ]) {
+      dirs.add(dir);
+    }
+  }
+
+  dirs.add(rootPath);
+  return [...dirs];
+}
+
+async function discoverSkillDirs(base: string, maxDepth: number): Promise<string[]> {
+  const found: string[] = [];
+  const ignored = new Set([
+    ".cache",
+    ".npm",
+    ".pnpm-store",
+    ".Trash",
+    ".vscode",
+    "Library",
+    "node_modules",
+  ]);
+
+  async function walk(dir: string, depth: number) {
+    if (depth > maxDepth || !existsSync(dir)) return;
+
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || ignored.has(entry.name)) continue;
+      if (depth === 0 && !entry.name.startsWith(".")) continue;
+
+      const entryPath = join(dir, entry.name);
+      if (entry.name === "skills") {
+        found.push(entryPath);
+        continue;
+      }
+
+      await walk(entryPath, depth + 1);
+    }
+  }
+
+  await walk(base, 0);
+  return found;
+}
+
+function getProjectRootFromSkillRoot(rootPath: string): string | null {
+  const normalized = resolve(rootPath);
+  for (const suffix of [
+    `${sep}.agent${sep}skills`,
+    `${sep}.agents${sep}skills`,
+    `${sep}.claude${sep}skills`,
+    `${sep}.cursor${sep}skills`,
+    `${sep}.codex${sep}skills`,
+  ]) {
+    if (normalized.endsWith(suffix)) {
+      return normalized.slice(0, -suffix.length);
+    }
+  }
+  return null;
+}
+
+async function renameSkillSymlinks(
+  symlinks: SkillSymlink[],
+  currentPath: string,
+  nextPath: string,
+  nextFolderName: string,
+): Promise<Array<SkillSymlink & { nextPath: string }>> {
+  const changed: Array<SkillSymlink & { nextPath: string }> = [];
+
+  for (const link of symlinks) {
+    const nextLinkPath = resolve(dirname(link.path), nextFolderName);
+    const nextTarget = rewriteSymlinkTarget(link, currentPath, nextPath);
+
+    try {
+      await rm(link.path);
+      await symlink(nextTarget, nextLinkPath);
+      changed.push({ ...link, nextPath: nextLinkPath });
+    } catch (err) {
+      await restoreSkillSymlinks(changed);
+      throw err;
+    }
+  }
+
+  return changed;
+}
+
+async function restoreSkillSymlinks(symlinks: Array<SkillSymlink & { nextPath: string }>) {
+  for (const link of symlinks.reverse()) {
+    if (await pathExistsNoFollow(link.nextPath)) {
+      await rm(link.nextPath);
+    }
+    if (!(await pathExistsNoFollow(link.path))) {
+      await symlink(link.linkTarget, link.path);
+    }
+  }
+}
+
+function rewriteSymlinkTarget(link: SkillSymlink, currentPath: string, nextPath: string): string {
+  if (isAbsolute(link.linkTarget)) return nextPath;
+
+  const currentTarget = resolve(dirname(link.path), link.linkTarget);
+  if (currentTarget !== resolve(currentPath)) {
+    return link.linkTarget;
+  }
+
+  return relative(dirname(link.path), nextPath);
+}
+
+async function pathExistsNoFollow(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function runSkillsCli(args: string[], projectPath: string | null): Promise<string> {
