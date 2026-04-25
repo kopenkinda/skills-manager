@@ -5,6 +5,7 @@ import { lstat, mkdir, readFile, readlink, readdir, rename, rm, stat, symlink } 
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { getEncoding } from "js-tiktoken";
 
 type SkillScope = "project" | "global" | "system";
 
@@ -31,6 +32,7 @@ type ScanResult = {
     readonly: boolean;
   }>;
   skills: Skill[];
+  tokenBudget: TokenBudget;
 };
 
 type AgentsFile = {
@@ -51,10 +53,30 @@ type SkillSymlink = {
   linkTarget: string;
 };
 
+type TokenBudget = {
+  tokenizer: string;
+  enabledSkillCount: number;
+  registryTokens: number;
+  models: Array<{
+    id: "gpt-5.4" | "gpt-5.5";
+    contextWindow: number;
+    thresholdPercent: number;
+    thresholdTokens: number;
+    usedPercent: number;
+    overThreshold: boolean;
+  }>;
+};
+
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL);
 const require = createRequire(import.meta.url);
 const { app, BrowserWindow, dialog, ipcMain } = require("electron") as typeof import("electron");
 const execFileAsync = promisify(execFile);
+const skillRegistryEncoding = getEncoding("o200k_base");
+const SKILL_CONTEXT_MODELS: Array<Pick<TokenBudget["models"][number], "id" | "contextWindow">> = [
+  { id: "gpt-5.4", contextWindow: 400_000 },
+  { id: "gpt-5.5", contextWindow: 1_000_000 },
+];
+const SKILL_CONTEXT_THRESHOLD_PERCENT = 2;
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -195,6 +217,7 @@ async function scanProject(projectPath: string | null): Promise<ScanResult> {
       exists: existsSync(root.path),
     })),
     skills,
+    tokenBudget: countSkillRegistryTokens(skills),
   };
 }
 
@@ -360,6 +383,40 @@ function dedupeSkillRows(skills: Skill[]): Skill[] {
   return [...byName.values()]
     .filter((skill): skill is Skill => skill !== null)
     .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function countSkillRegistryTokens(skills: Skill[]): TokenBudget {
+  const enabledSkills = skills.filter((skill) => skill.enabled);
+  const registryText = enabledSkills
+    .map((skill) =>
+      [
+        `name: ${skill.name}`,
+        `description: ${skill.description}`,
+        `path: ${skill.path}`,
+        `scope: ${skill.scope}`,
+      ].join("\n"),
+    )
+    .join("\n\n");
+  const registryTokens = skillRegistryEncoding.encode(registryText).length;
+
+  return {
+    tokenizer: "o200k_base",
+    enabledSkillCount: enabledSkills.length,
+    registryTokens,
+    models: SKILL_CONTEXT_MODELS.map((model) => {
+      const thresholdTokens = Math.floor(
+        model.contextWindow * (SKILL_CONTEXT_THRESHOLD_PERCENT / 100),
+      );
+
+      return {
+        ...model,
+        thresholdPercent: SKILL_CONTEXT_THRESHOLD_PERCENT,
+        thresholdTokens,
+        usedPercent: (registryTokens / model.contextWindow) * 100,
+        overThreshold: registryTokens > thresholdTokens,
+      };
+    }),
+  };
 }
 
 function parseFrontmatter(source: string): { name?: string; description?: string } {

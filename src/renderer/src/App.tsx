@@ -274,6 +274,8 @@ function App() {
           </div>
 
           <aside className="flex min-h-0 flex-col gap-4">
+            {scan?.tokenBudget ? <TokenBudgetCard budget={scan.tokenBudget} /> : null}
+
             <Card>
               <CardHeader>
                 <div className="flex items-start justify-between gap-3">
@@ -408,6 +410,61 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
+function TokenBudgetCard({ budget }: { budget: TokenBudget }) {
+  const overAny = budget.models.some((model) => model.overThreshold);
+
+  return (
+    <Card className={cn(overAny && "border-destructive/40")}>
+      <CardHeader>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <CardTitle>Codex Context</CardTitle>
+            <CardDescription>
+              Enabled skill registry estimate. {budget.tokenizer}.
+            </CardDescription>
+          </div>
+          <Badge variant={overAny ? "default" : "secondary"}>
+            {formatNumber(budget.registryTokens)}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-3 text-sm">
+          <span className="text-muted-foreground">Enabled skills</span>
+          <span className="font-medium">{budget.enabledSkillCount}</span>
+        </div>
+        <div className="flex flex-col gap-2">
+          {budget.models.map((model) => (
+            <div key={model.id} className="rounded-lg border bg-background px-3 py-2">
+              <div className="flex items-center justify-between gap-2 text-sm">
+                <span className="font-medium">{model.id}</span>
+                <Badge variant={model.overThreshold ? "default" : "muted"}>
+                  {model.usedPercent.toFixed(2)}%
+                </Badge>
+              </div>
+              <div className="mt-2 h-2 overflow-hidden rounded-full bg-muted">
+                <div
+                  className={cn("h-full bg-primary", model.overThreshold && "bg-destructive")}
+                  style={{ width: `${Math.min(model.usedPercent / model.thresholdPercent, 1) * 100}%` }}
+                />
+              </div>
+              <p className="mt-2 text-xs text-muted-foreground">
+                {formatNumber(budget.registryTokens)} / {formatNumber(model.thresholdTokens)} token 2% budget
+              </p>
+            </div>
+          ))}
+        </div>
+        {overAny ? (
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <AlertCircle data-icon="inline-start" />
+            <span>Enabled skill descriptions exceed the 2% context budget.</span>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 function SkillRow({
   skill,
   disabled,
@@ -451,6 +508,10 @@ function SkillRow({
 
 function errorMessage(err: unknown) {
   return err instanceof Error ? err.message : String(err);
+}
+
+function formatNumber(value: number) {
+  return new Intl.NumberFormat().format(Math.round(value));
 }
 
 export default App;

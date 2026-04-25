@@ -25,6 +25,7 @@ type ScanResult = {
     readonly: boolean;
   }>;
   skills: Skill[];
+  tokenBudget: TokenBudget;
 };
 
 type AgentsFile = {
@@ -38,6 +39,20 @@ type UpdateResult = {
   output: string;
   updateCount: number | null;
   updates: Array<{ name: string; source?: string }>;
+};
+
+type TokenBudget = {
+  tokenizer: string;
+  enabledSkillCount: number;
+  registryTokens: number;
+  models: Array<{
+    id: "gpt-5.4" | "gpt-5.5";
+    contextWindow: number;
+    thresholdPercent: number;
+    thresholdTokens: number;
+    usedPercent: number;
+    overThreshold: boolean;
+  }>;
 };
 
 interface Window {
