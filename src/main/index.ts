@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
-import { lstat, readFile, readlink, readdir, rename, rm, stat, symlink } from "node:fs/promises";
+import { lstat, mkdir, readFile, readlink, readdir, rename, rm, stat, symlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -128,30 +128,30 @@ ipcMain.handle(
 
     const rootPath = resolve(payload.rootPath);
     const currentPath = resolve(rootPath, payload.folderName);
-    const nextFolderName = payload.enabled
-      ? stripDisabledSuffix(payload.folderName)
-      : `${stripDisabledSuffix(payload.folderName)}.disabled`;
-    const nextPath = resolve(rootPath, nextFolderName);
+    const skillName = getSkillBaseName(payload.folderName);
+    const disabledRoot = getDisabledRoot(rootPath);
+    const nextPath = payload.enabled ? resolve(rootPath, skillName) : resolve(disabledRoot, skillName);
 
-    if (dirname(currentPath) !== rootPath || dirname(nextPath) !== rootPath) {
+    if (!isInsideOrSame(rootPath, currentPath) || !isInsideOrSame(rootPath, nextPath)) {
       throw new Error("Invalid skill path.");
     }
     if (!existsSync(currentPath)) {
       throw new Error("Skill folder no longer exists.");
     }
-    if (existsSync(nextPath)) {
-      throw new Error(`Target folder already exists: ${nextFolderName}`);
-    }
+    const conflictStamp = getConflictStamp();
+    await mkdir(dirname(nextPath), { recursive: true });
+    await archivePathIfExists(nextPath, conflictStamp);
 
     const symlinks = await findSkillSymlinks(currentPath, rootPath);
     for (const link of symlinks) {
-      const nextLinkPath = resolve(dirname(link.path), nextFolderName);
-      if (nextLinkPath !== link.path && (await pathExistsNoFollow(nextLinkPath))) {
-        throw new Error(`Target symlink already exists: ${nextLinkPath}`);
+      const nextLinkPath = getNextSymlinkPath(link.path, skillName, payload.enabled);
+      if (nextLinkPath !== link.path) {
+        await mkdir(dirname(nextLinkPath), { recursive: true });
+        await archivePathIfExists(nextLinkPath, conflictStamp);
       }
     }
 
-    const changedSymlinks = await renameSkillSymlinks(symlinks, currentPath, nextPath, nextFolderName);
+    const changedSymlinks = await renameSkillSymlinks(symlinks, currentPath, nextPath, payload.enabled);
     try {
       await rename(currentPath, nextPath);
     } catch (err) {
@@ -245,36 +245,119 @@ async function scanSkillRoot(root: {
 }): Promise<Skill[]> {
   if (!existsSync(root.path)) return [];
 
-  const entries = await readdir(root.path, { withFileTypes: true });
+  const enabledSkills = await scanSkillDirectory(root, root.path, true);
+  const disabledSkills = await scanSkillDirectory(root, getDisabledRoot(root.path), false);
+  const legacyDisabledSkills = await scanLegacyDisabledSkillDirectory(root);
+  const skills = [...enabledSkills, ...disabledSkills, ...legacyDisabledSkills];
+
+  return dedupeSkillRows(skills).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function scanSkillDirectory(
+  root: {
+    label: string;
+    path: string;
+    scope: SkillScope;
+    readonly: boolean;
+  },
+  directory: string,
+  enabled: boolean,
+): Promise<Skill[]> {
+  if (!existsSync(directory)) return [];
+
+  const entries = await readdir(directory, { withFileTypes: true });
   const skills = await Promise.all(
     entries
       .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.name !== ".disabled")
+      .filter((entry) => !isArchivedConflictName(entry.name))
       .map(async (entry): Promise<Skill | null> => {
-        const skillPath = join(root.path, entry.name);
+        const skillPath = join(directory, entry.name);
         const skillFile = join(skillPath, "SKILL.md");
 
         if (!existsSync(skillFile)) return null;
 
         const source = await readFile(skillFile, "utf8");
         const frontmatter = parseFrontmatter(source);
-        const cleanFolder = stripDisabledSuffix(entry.name);
+        const skillName = getSkillBaseName(entry.name);
+
+        return {
+          id: `${root.path}:${enabled ? "" : ".disabled/"}${entry.name}`,
+          name: frontmatter.name || skillName,
+          folderName: enabled ? entry.name : `.disabled/${entry.name}`,
+          description: frontmatter.description || "",
+          scope: root.scope,
+          rootLabel: root.label,
+          rootPath: root.path,
+          path: skillPath,
+          enabled,
+          readonly: root.readonly,
+        };
+      }),
+  );
+
+  return skills.filter((skill): skill is Skill => skill !== null);
+}
+
+async function scanLegacyDisabledSkillDirectory(root: {
+  label: string;
+  path: string;
+  scope: SkillScope;
+  readonly: boolean;
+}): Promise<Skill[]> {
+  const entries = await readdir(root.path, { withFileTypes: true });
+  const skills = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .filter((entry) => entry.name.endsWith(".disabled"))
+      .filter((entry) => !isArchivedConflictName(entry.name))
+      .map(async (entry): Promise<Skill | null> => {
+        const skillPath = join(root.path, entry.name);
+        const skillFile = join(skillPath, "SKILL.md");
+        const disabledSkillFile = join(skillPath, "SKILL.md.disabled");
+        const readableSkillFile = existsSync(skillFile)
+          ? skillFile
+          : existsSync(disabledSkillFile)
+            ? disabledSkillFile
+            : null;
+
+        if (!readableSkillFile) return null;
+
+        const source = await readFile(readableSkillFile, "utf8");
+        const frontmatter = parseFrontmatter(source);
+        const skillName = getSkillBaseName(entry.name);
 
         return {
           id: `${root.path}:${entry.name}`,
-          name: frontmatter.name || cleanFolder,
+          name: frontmatter.name || skillName,
           folderName: entry.name,
           description: frontmatter.description || "",
           scope: root.scope,
           rootLabel: root.label,
           rootPath: root.path,
           path: skillPath,
-          enabled: entry.name === cleanFolder,
+          enabled: false,
           readonly: root.readonly,
         };
       }),
   );
 
-  return skills
+  return skills.filter((skill): skill is Skill => skill !== null);
+}
+
+function dedupeSkillRows(skills: Skill[]): Skill[] {
+  const byName = new Map<string, Skill>();
+
+  for (const skill of skills) {
+    const key = getSkillBaseName(skill.folderName);
+    const existing = byName.get(key);
+
+    if (!existing || (!existing.enabled && skill.enabled)) {
+      byName.set(key, skill);
+    }
+  }
+
+  return [...byName.values()]
     .filter((skill): skill is Skill => skill !== null)
     .sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -302,6 +385,19 @@ function parseFrontmatter(source: string): { name?: string; description?: string
 
 function stripDisabledSuffix(name: string): string {
   return name.endsWith(".disabled") ? name.slice(0, -".disabled".length) : name;
+}
+
+function getSkillBaseName(name: string): string {
+  const normalized = name.startsWith(".disabled/") ? name.slice(".disabled/".length) : name;
+  return stripDisabledSuffix(normalized.replace(/\.conflict-\d{14}(?:-\d+)?(?:\.disabled)?$/, ""));
+}
+
+function isArchivedConflictName(name: string): boolean {
+  return /\.conflict-\d{14}(?:-\d+)?(?:\.disabled)?$/.test(name);
+}
+
+function getDisabledRoot(rootPath: string): string {
+  return join(rootPath, ".disabled");
 }
 
 async function scanAgentsFiles(projectPath: string, targetPath: string): Promise<AgentsFile[]> {
@@ -358,21 +454,23 @@ async function findSkillSymlinks(skillPath: string, rootPath: string): Promise<S
   const symlinks: SkillSymlink[] = [];
 
   for (const root of roots) {
-    if (!existsSync(root)) continue;
+    for (const directory of [root, getDisabledRoot(root)]) {
+      if (!existsSync(directory)) continue;
 
-    const entries = await readdir(root, { withFileTypes: true });
-    for (const entry of entries) {
-      const entryPath = join(root, entry.name);
-      const entryStat = await lstat(entryPath);
-      if (!entryStat.isSymbolicLink()) continue;
+      const entries = await readdir(directory, { withFileTypes: true });
+      for (const entry of entries) {
+        const entryPath = join(directory, entry.name);
+        const entryStat = await lstat(entryPath);
+        if (!entryStat.isSymbolicLink()) continue;
 
-      const linkTarget = await readlink(entryPath);
-      const absoluteTarget = isAbsolute(linkTarget)
-        ? resolve(linkTarget)
-        : resolve(dirname(entryPath), linkTarget);
+        const linkTarget = await readlink(entryPath);
+        const absoluteTarget = isAbsolute(linkTarget)
+          ? resolve(linkTarget)
+          : resolve(dirname(entryPath), linkTarget);
 
-      if (absoluteTarget === resolvedSkillPath) {
-        symlinks.push({ path: entryPath, linkTarget });
+        if (absoluteTarget === resolvedSkillPath) {
+          symlinks.push({ path: entryPath, linkTarget });
+        }
       }
     }
   }
@@ -479,15 +577,17 @@ async function renameSkillSymlinks(
   symlinks: SkillSymlink[],
   currentPath: string,
   nextPath: string,
-  nextFolderName: string,
+  enabled: boolean,
 ): Promise<Array<SkillSymlink & { nextPath: string }>> {
   const changed: Array<SkillSymlink & { nextPath: string }> = [];
+  const skillName = getSkillBaseName(basename(nextPath));
 
   for (const link of symlinks) {
-    const nextLinkPath = resolve(dirname(link.path), nextFolderName);
+    const nextLinkPath = getNextSymlinkPath(link.path, skillName, enabled);
     const nextTarget = rewriteSymlinkTarget(link, currentPath, nextPath);
 
     try {
+      await mkdir(dirname(nextLinkPath), { recursive: true });
       await rm(link.path);
       await symlink(nextTarget, nextLinkPath);
       changed.push({ ...link, nextPath: nextLinkPath });
@@ -498,6 +598,16 @@ async function renameSkillSymlinks(
   }
 
   return changed;
+}
+
+function getSymlinkRoot(path: string): string {
+  const parent = dirname(path);
+  return basename(parent) === ".disabled" ? dirname(parent) : parent;
+}
+
+function getNextSymlinkPath(path: string, skillName: string, enabled: boolean): string {
+  const linkRoot = getSymlinkRoot(path);
+  return enabled ? resolve(linkRoot, skillName) : resolve(linkRoot, ".disabled", skillName);
 }
 
 async function restoreSkillSymlinks(symlinks: Array<SkillSymlink & { nextPath: string }>) {
@@ -529,6 +639,25 @@ async function pathExistsNoFollow(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function archivePathIfExists(path: string, stamp: string): Promise<string | null> {
+  if (!(await pathExistsNoFollow(path))) return null;
+
+  let archivedPath = `${path}.conflict-${stamp}`;
+  let index = 1;
+
+  while (await pathExistsNoFollow(archivedPath)) {
+    archivedPath = `${path}.conflict-${stamp}-${index}`;
+    index += 1;
+  }
+
+  await rename(path, archivedPath);
+  return archivedPath;
+}
+
+function getConflictStamp(): string {
+  return new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14);
 }
 
 async function runSkillsCli(args: string[], projectPath: string | null): Promise<string> {
