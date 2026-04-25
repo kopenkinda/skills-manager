@@ -15,6 +15,9 @@ const api = {
   }) => ipcRenderer.invoke("skill:toggle", payload),
   scanAgents: (payload: { projectPath: string; targetPath: string }) =>
     ipcRenderer.invoke("agents:scan", payload),
+  updateProject: (projectPath: string | null) =>
+    ipcRenderer.invoke("skills:update-project", projectPath),
+  updateGlobal: () => ipcRenderer.invoke("skills:update-global"),
 };
 
 contextBridge.exposeInMainWorld("skillsManager", api);

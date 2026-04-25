@@ -1,8 +1,10 @@
+import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
 import { readFile, readdir, rename, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { promisify } from "node:util";
 
 type SkillScope = "project" | "global" | "system";
 
@@ -37,9 +39,17 @@ type AgentsFile = {
   content: string;
 };
 
+type UpdateResult = {
+  command: string;
+  output: string;
+  updateCount: number | null;
+  updates: Array<{ name: string; source?: string }>;
+};
+
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL);
 const require = createRequire(import.meta.url);
 const { app, BrowserWindow, dialog, ipcMain } = require("electron") as typeof import("electron");
+const execFileAsync = promisify(execFile);
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -139,6 +149,20 @@ ipcMain.handle(
     return scanAgentsFiles(payload.projectPath, payload.targetPath);
   },
 );
+
+ipcMain.handle("skills:update-project", async (_event, projectPath: string | null) => {
+  if (!projectPath) {
+    throw new Error("Select a project before updating project skills.");
+  }
+
+  const output = await runSkillsCli(["skills", "update", "--project"], projectPath);
+  return parseUpdateOutput(output, "pnpx skills update --project");
+});
+
+ipcMain.handle("skills:update-global", async () => {
+  const output = await runSkillsCli(["skills", "update", "--global"], null);
+  return parseUpdateOutput(output, "pnpx skills update --global");
+});
 
 async function scanProject(projectPath: string | null): Promise<ScanResult> {
   const normalizedProject = projectPath ? resolve(projectPath) : null;
@@ -307,4 +331,60 @@ async function findAgentsFile(dir: string): Promise<string | null> {
 function isInsideOrSame(parent: string, child: string): boolean {
   const rel = relative(parent, child);
   return rel === "" || (!rel.startsWith("..") && !rel.includes(`..${sep}`));
+}
+
+async function runSkillsCli(args: string[], projectPath: string | null): Promise<string> {
+  const cwd = projectPath && existsSync(projectPath) ? projectPath : homedir();
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+
+  try {
+    const { stdout, stderr } = await execFileAsync("pnpx", args, {
+      cwd,
+      env,
+      maxBuffer: 1024 * 1024 * 4,
+      timeout: 120_000,
+    });
+    return stripAnsi([stdout, stderr].filter(Boolean).join("\n"));
+  } catch (err) {
+    if (isExecError(err)) {
+      const output = stripAnsi([err.stdout, err.stderr].filter(Boolean).join("\n"));
+      throw new Error(output || err.message);
+    }
+    throw err;
+  }
+}
+
+function parseUpdateOutput(output: string, command: string): UpdateResult {
+  const updates: Array<{ name: string; source?: string }> = [];
+  const lines = output.split(/\r?\n/);
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i].trim();
+    const match = line.match(/^↑\s+(.+)$/);
+    if (!match) continue;
+
+    const next = lines[i + 1]?.trim();
+    const source = next?.startsWith("source:") ? next.slice("source:".length).trim() : undefined;
+    updates.push({ name: match[1].trim(), source });
+  }
+
+  const countMatch =
+    output.match(/Found\s+(\d+)\s+update\(s\)/) ||
+    output.match(/(\d+)\s+update\(s\)\s+available/);
+
+  return {
+    command,
+    output,
+    updateCount: countMatch ? Number(countMatch[1]) : updates.length,
+    updates,
+  };
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").replace(/\r/g, "\n");
+}
+
+function isExecError(err: unknown): err is Error & { stdout?: string; stderr?: string } {
+  return err instanceof Error && ("stdout" in err || "stderr" in err);
 }

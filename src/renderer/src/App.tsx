@@ -1,6 +1,7 @@
 import {
   AlertCircle,
   CheckCircle2,
+  Download,
   FolderOpen,
   Globe2,
   Lock,
@@ -34,6 +35,7 @@ function App() {
   const [filter, setFilter] = useState<SkillFilter>("all");
   const [targetPath, setTargetPath] = useState<string | null>(null);
   const [agentsFiles, setAgentsFiles] = useState<AgentsFile[]>([]);
+  const [updateResult, setUpdateResult] = useState<UpdateResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -143,6 +145,44 @@ function App() {
     }
   }
 
+  async function updateProjectSkills() {
+    if (!window.skillsManager) {
+      setError("Electron preload API unavailable. Restart the app after rebuilding.");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await window.skillsManager.updateProject(scan?.projectPath ?? null);
+      setUpdateResult(result);
+      await refresh(scan?.projectPath ?? null);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function updateGlobalSkills() {
+    if (!window.skillsManager) {
+      setError("Electron preload API unavailable. Restart the app after rebuilding.");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await window.skillsManager.updateGlobal();
+      setUpdateResult(result);
+      await refresh(scan?.projectPath ?? null);
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <main className="min-h-screen bg-background text-foreground">
       <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-6 py-5">
@@ -234,6 +274,53 @@ function App() {
           </div>
 
           <aside className="flex min-h-0 flex-col gap-4">
+            <Card>
+              <CardHeader>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <CardTitle>Updates</CardTitle>
+                    <CardDescription>Runs pnpx skills update.</CardDescription>
+                  </div>
+                  <Badge variant={updateResult?.updateCount ? "default" : "secondary"}>
+                    {updateResult?.updateCount ?? "-"}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent className="flex flex-col gap-3">
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={updateProjectSkills}
+                    disabled={busy || !scan?.projectPath}
+                  >
+                    <Download data-icon="inline-start" />
+                    Project
+                  </Button>
+                  <Button size="sm" onClick={updateGlobalSkills} disabled={busy}>
+                    <Download data-icon="inline-start" />
+                    Global
+                  </Button>
+                </div>
+                {updateResult ? (
+                  <div className="rounded-lg border bg-background">
+                    <div className="flex items-center justify-between gap-2 px-3 py-2">
+                      <span className="truncate text-xs font-medium">{updateResult.command}</span>
+                      <Badge variant="muted">
+                        {updateResult.updates.length ? `${updateResult.updates.length} listed` : "Done"}
+                      </Badge>
+                    </div>
+                    <Separator />
+                    <ScrollArea className="h-32">
+                      <pre className="whitespace-pre-wrap break-words p-3 text-xs leading-5 text-muted-foreground">
+                        {updateResult.output}
+                      </pre>
+                    </ScrollArea>
+                  </div>
+                ) : null}
+              </CardContent>
+            </Card>
+
             <Card>
               <CardHeader>
                 <CardTitle>Skill Roots</CardTitle>

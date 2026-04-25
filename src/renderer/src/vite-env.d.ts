@@ -33,6 +33,13 @@ type AgentsFile = {
   content: string;
 };
 
+type UpdateResult = {
+  command: string;
+  output: string;
+  updateCount: number | null;
+  updates: Array<{ name: string; source?: string }>;
+};
+
 interface Window {
   skillsManager: {
     selectProject: () => Promise<ScanResult | null>;
@@ -45,5 +52,7 @@ interface Window {
       readonly: boolean;
     }) => Promise<boolean>;
     scanAgents: (payload: { projectPath: string; targetPath: string }) => Promise<AgentsFile[]>;
+    updateProject: (projectPath: string | null) => Promise<UpdateResult>;
+    updateGlobal: () => Promise<UpdateResult>;
   };
 }
