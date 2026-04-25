@@ -8,7 +8,9 @@ import {
   RefreshCw,
   Search,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useGSAP } from "@gsap/react";
+import gsap from "gsap";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,6 +32,7 @@ const filterLabels: Record<SkillFilter, string> = {
 };
 
 function App() {
+  const shellRef = useRef<HTMLElement | null>(null);
   const [scan, setScan] = useState<ScanResult | null>(null);
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<SkillFilter>("all");
@@ -42,6 +45,19 @@ function App() {
   useEffect(() => {
     void refresh(null);
   }, []);
+
+  useGSAP(
+    () => {
+      gsap.from("[data-reveal]", {
+        y: 16,
+        opacity: 0,
+        duration: 0.55,
+        stagger: 0.06,
+        ease: "power3.out",
+      });
+    },
+    { scope: shellRef },
+  );
 
   const skills = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -184,36 +200,39 @@ function App() {
   }
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-5 px-6 py-5">
-        <header className="flex flex-wrap items-center justify-between gap-3">
-          <div className="min-w-0">
-            <h1 className="text-2xl font-semibold tracking-normal">Skills Manager</h1>
-            <p className="mt-1 truncate text-sm text-muted-foreground">
-              {scan?.projectPath ?? "No project selected"}
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={() => refresh()} disabled={busy}>
-              <RefreshCw data-icon="inline-start" className={cn(busy && "animate-spin")} />
-              Refresh
-            </Button>
-            <Button onClick={selectProject} disabled={busy}>
-              <FolderOpen data-icon="inline-start" />
-              Select Project
-            </Button>
+    <main ref={shellRef} className="min-h-screen w-full max-w-full overflow-x-hidden bg-background text-foreground">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_12%_8%,rgba(54,211,153,0.18),transparent_30%),radial-gradient(circle_at_85%_12%,rgba(245,158,11,0.12),transparent_26%),linear-gradient(180deg,rgba(255,255,255,0.035),transparent_38%)]" />
+      <div className="relative mx-auto flex min-h-screen w-full max-w-[1500px] flex-col gap-5 px-6 py-5">
+        <header data-reveal className="rounded-2xl border bg-card/80 px-5 py-4 shadow-2xl shadow-black/20 backdrop-blur">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="text-3xl font-semibold tracking-normal">Skills Manager</h1>
+              <p className="mt-1 max-w-4xl truncate text-sm text-muted-foreground">
+                {scan?.projectPath ?? "Choose a project folder to inspect local skills and AGENTS.md inheritance."}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => refresh()} disabled={busy}>
+                <RefreshCw data-icon="inline-start" className={cn(busy && "animate-spin")} />
+                Refresh
+              </Button>
+              <Button onClick={selectProject} disabled={busy}>
+                <FolderOpen data-icon="inline-start" />
+                Select Project
+              </Button>
+            </div>
           </div>
         </header>
 
         {error ? (
-          <div className="flex items-center gap-2 rounded-lg border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <div data-reveal className="flex items-center gap-2 rounded-xl border border-destructive/25 bg-destructive/10 px-4 py-3 text-sm text-destructive">
             <AlertCircle data-icon="inline-start" />
             <span>{error}</span>
           </div>
         ) : null}
 
-        <section className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px] gap-5">
-          <div className="flex min-h-0 flex-col gap-4">
+        <section className="grid min-h-0 flex-1 grid-cols-12 gap-5">
+          <div data-reveal className="col-span-8 flex min-h-0 flex-col gap-4">
             <div className="grid grid-cols-4 gap-3">
               <Metric label="Total" value={counts.all} />
               <Metric label="Enabled" value={counts.enabled} />
@@ -221,12 +240,12 @@ function App() {
               <Metric label="Global" value={counts.global + counts.system} />
             </div>
 
-            <Card className="min-h-0 flex-1">
+            <Card className="min-h-0 flex-1 overflow-hidden">
               <CardHeader className="pb-3">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <CardTitle>Skills</CardTitle>
-                    <CardDescription>Toggle project/global skills by renaming folders.</CardDescription>
+                    <CardDescription>Enable, disable, and keep symlinked agent installs aligned.</CardDescription>
                   </div>
                   <div className="relative w-72 max-w-full">
                     <Search className="pointer-events-none absolute left-3 top-2.5 text-muted-foreground" />
@@ -249,7 +268,7 @@ function App() {
                     ))}
                   </TabsList>
                   <TabsContent value={filter} className="min-h-0">
-                    <ScrollArea className="h-[430px] pr-3">
+                    <ScrollArea className="h-[492px] pr-3">
                       <div className="flex flex-col gap-3">
                         {skills.length ? (
                           skills.map((skill) => (
@@ -273,7 +292,7 @@ function App() {
             </Card>
           </div>
 
-          <aside className="flex min-h-0 flex-col gap-4">
+          <aside data-reveal className="col-span-4 flex min-h-0 flex-col gap-4">
             {scan?.tokenBudget ? <TokenBudgetCard budget={scan.tokenBudget} /> : null}
 
             <Card>
@@ -401,10 +420,10 @@ function App() {
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <Card>
+    <Card className="group overflow-hidden transition-transform duration-500 hover:-translate-y-0.5">
       <CardContent className="p-4">
         <div className="text-xs font-medium uppercase text-muted-foreground">{label}</div>
-        <div className="mt-2 text-2xl font-semibold">{value}</div>
+        <div className="mt-2 text-3xl font-semibold">{value}</div>
       </CardContent>
     </Card>
   );
@@ -414,7 +433,7 @@ function TokenBudgetCard({ budget }: { budget: TokenBudget }) {
   const overAny = budget.models.some((model) => model.overThreshold);
 
   return (
-    <Card className={cn(overAny && "border-destructive/40")}>
+    <Card className={cn("overflow-hidden", overAny && "border-destructive/40")}>
       <CardHeader>
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -435,7 +454,7 @@ function TokenBudgetCard({ budget }: { budget: TokenBudget }) {
         </div>
         <div className="flex flex-col gap-2">
           {budget.models.map((model) => (
-            <div key={model.id} className="rounded-lg border bg-background px-3 py-2">
+            <div key={model.id} className="rounded-xl border bg-background/70 px-3 py-2">
               <div className="flex items-center justify-between gap-2 text-sm">
                 <span className="font-medium">{model.id}</span>
                 <Badge variant={model.overThreshold ? "default" : "muted"}>
@@ -475,7 +494,7 @@ function SkillRow({
   onToggle: () => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-lg border bg-background px-4 py-3">
+    <div className="group flex items-center justify-between gap-4 rounded-xl border bg-background/70 px-4 py-3 transition-all duration-300 hover:-translate-y-0.5 hover:bg-accent/60">
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <span className="truncate font-medium">{skill.name}</span>

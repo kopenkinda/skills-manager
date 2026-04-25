@@ -23,25 +23,25 @@
 }
 
 :root {
-  --background: #f7f4ee;
-  --foreground: #221f1a;
-  --card: #fffdfa;
-  --card-foreground: #221f1a;
-  --popover: #fffdfa;
-  --popover-foreground: #221f1a;
-  --primary: #1f6f62;
-  --primary-foreground: #f8fffc;
-  --secondary: #dfe8df;
-  --secondary-foreground: #1f2a24;
-  --muted: #ece7dc;
-  --muted-foreground: #6d685f;
-  --accent: #f0e4c8;
-  --accent-foreground: #2d2514;
-  --destructive: #b42318;
-  --destructive-foreground: #fff7f6;
-  --border: #ded7ca;
-  --input: #d5cec1;
-  --ring: #1f6f62;
+  --background: #090d12;
+  --foreground: #edf7f2;
+  --card: #101821;
+  --card-foreground: #edf7f2;
+  --popover: #101821;
+  --popover-foreground: #edf7f2;
+  --primary: #57d6a3;
+  --primary-foreground: #06100c;
+  --secondary: #1e2b33;
+  --secondary-foreground: #d8efe7;
+  --muted: #172128;
+  --muted-foreground: #90a39b;
+  --accent: #172d28;
+  --accent-foreground: #dcfff3;
+  --destructive: #ff7a70;
+  --destructive-foreground: #210503;
+  --border: #22313a;
+  --input: #263740;
+  --ring: #57d6a3;
   font-family:
     ui-sans-serif,
     -apple-system,
@@ -57,6 +57,7 @@
 body {
   margin: 0;
   min-width: 920px;
+  background: var(--background);
 }
 
 svg {
