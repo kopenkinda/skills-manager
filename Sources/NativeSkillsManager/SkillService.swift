@@ -94,17 +94,36 @@ final class SkillService: @unchecked Sendable {
         }
     }
 
-    func updateProjectSkills(projectPath: String?) async throws -> UpdateResult {
-        guard let projectPath else {
-            throw SkillError.message("Select a project before updating project skills.")
-        }
-        let output = try await runSkillsCli(args: ["skills", "update", "--project"], projectPath: projectPath)
-        return parseUpdateOutput(output, command: "pnpx skills update --project")
-    }
-
     func updateGlobalSkills() async throws -> UpdateResult {
         let output = try await runSkillsCli(args: ["skills", "update", "--global"], projectPath: nil)
         return parseUpdateOutput(output, command: "pnpx skills update --global")
+    }
+
+    func updateSkill(_ skill: Skill, projectPath: String?) async throws -> UpdateResult {
+        if skill.readonly || skill.scope == .system {
+            throw SkillError.message("This skill root is read-only.")
+        }
+
+        let skillName = skillBaseName(skill.folderName)
+        let args: [String]
+        let cwd: String?
+
+        switch skill.scope {
+        case .project:
+            guard let projectPath else {
+                throw SkillError.message("Select a project before updating project skills.")
+            }
+            args = ["skills", "update", skillName, "--project", "--yes"]
+            cwd = projectPath
+        case .global:
+            args = ["skills", "update", skillName, "--global", "--yes"]
+            cwd = nil
+        case .system:
+            throw SkillError.message("System skills cannot be updated.")
+        }
+
+        let output = try await runSkillsCli(args: args, projectPath: cwd)
+        return parseUpdateOutput(output, command: "pnpx \(args.joined(separator: " "))")
     }
 
     func removeSkill(_ skill: Skill) async throws -> UpdateResult {
@@ -415,11 +434,12 @@ final class SkillService: @unchecked Sendable {
     private func runSkillsCli(args: [String], projectPath: String?) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-            process.arguments = ["pnpx"] + args
+            process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            process.arguments = ["-lc", pnpxLauncherScript, "skills-manager-cli"] + args
             process.currentDirectoryURL = URL(fileURLWithPath: projectPath ?? NSHomeDirectory())
             var env = ProcessInfo.processInfo.environment
             env.removeValue(forKey: "ELECTRON_RUN_AS_NODE")
+            env["PATH"] = cliPath(existing: env["PATH"])
             process.environment = env
 
             let pipe = Pipe()
@@ -443,6 +463,40 @@ final class SkillService: @unchecked Sendable {
                 continuation.resume(throwing: error)
             }
         }
+    }
+
+    private var pnpxLauncherScript: String {
+        """
+        if command -v pnpx >/dev/null 2>&1; then
+          exec pnpx "$@"
+        fi
+
+        for fnm in /opt/homebrew/bin/fnm /usr/local/bin/fnm "$HOME/.local/bin/fnm"; do
+          if [ -x "$fnm" ]; then
+            exec "$fnm" exec --using default -- pnpx "$@"
+          fi
+        done
+
+        echo "pnpx not found. Install pnpm/pnpx or fnm with a default Node version." >&2
+        exit 127
+        """
+    }
+
+    private func cliPath(existing: String?) -> String {
+        [
+            existing,
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "\(NSHomeDirectory())/.local/bin",
+            "\(NSHomeDirectory())/.npm-global/bin",
+            "\(NSHomeDirectory())/.nvm/current/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+        .compactMap(\.self)
+        .joined(separator: ":")
     }
 
     private func parseUpdateOutput(_ output: String, command: String) -> UpdateResult {

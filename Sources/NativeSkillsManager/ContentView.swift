@@ -67,19 +67,19 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func updateProjectSkills() {
+    func updateGlobalSkills() {
         Task {
             await runBusy { [self] in
-                self.updateResult = try await self.service.updateProjectSkills(projectPath: self.scan?.projectPath)
+                self.updateResult = try await self.service.updateGlobalSkills()
                 self.scan = try await self.service.scanProject(self.scan?.projectPath)
             }
         }
     }
 
-    func updateGlobalSkills() {
+    func update(_ skill: Skill) {
         Task {
             await runBusy { [self] in
-                self.updateResult = try await self.service.updateGlobalSkills()
+                self.updateResult = try await self.service.updateSkill(skill, projectPath: self.scan?.projectPath)
                 self.scan = try await self.service.scanProject(self.scan?.projectPath)
             }
         }
@@ -182,16 +182,9 @@ struct SidebarView: View {
 
                 SidebarSection("Updates") {
                     Button {
-                        model.updateProjectSkills()
-                    } label: {
-                        Label("Update Project", systemImage: "arrow.down.circle")
-                    }
-                    .disabled(model.busy || model.scan?.projectPath == nil)
-
-                    Button {
                         model.updateGlobalSkills()
                     } label: {
-                        Label("Update Global", systemImage: "arrow.down.circle")
+                        Label("Update Global Skills", systemImage: "arrow.down.circle")
                     }
                     .disabled(model.busy)
 
@@ -317,6 +310,8 @@ struct SkillListView: View {
                         ForEach(model.filteredSkills) { skill in
                             SkillRow(skill: skill, busy: model.busy) {
                                 model.toggle(skill)
+                            } onUpdate: {
+                                model.update(skill)
                             } onDelete: {
                                 model.remove(skill)
                             }
@@ -336,6 +331,7 @@ struct SkillRow: View {
     var skill: Skill
     var busy: Bool
     var onToggle: () -> Void
+    var onUpdate: () -> Void
     var onDelete: () -> Void
 
     var body: some View {
@@ -369,6 +365,15 @@ struct SkillRow: View {
             .toggleStyle(.switch)
             .disabled(busy || skill.readonly)
 
+            Button {
+                onUpdate()
+            } label: {
+                Label("Update", systemImage: "arrow.down.circle")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .disabled(busy || skill.readonly || skill.scope == .system)
+
             Button(role: .destructive) {
                 confirmingDelete = true
             } label: {
@@ -387,7 +392,7 @@ struct SkillRow: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Runs pnpx skills remove for this skill.")
+                Text("Deletes this skill folder and related symlinks.")
             }
         }
         .padding(.vertical, 4)
