@@ -85,6 +85,21 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func remove(_ skill: Skill) {
+        Task {
+            busy = true
+            error = nil
+            do {
+                updateResult = try await service.removeSkill(skill)
+                scan = try await service.scanProject(scan?.projectPath)
+                busy = false
+            } catch {
+                self.error = error.localizedDescription
+                busy = false
+            }
+        }
+    }
+
     private func runBusy(_ operation: @escaping () async throws -> Void) async {
         busy = true
         error = nil
@@ -136,78 +151,120 @@ struct SidebarView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        List {
-            Section {
-                Text(model.scan?.projectPath ?? "Choose a project folder.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .truncationMode(.middle)
-            } header: {
-                Text("Project")
-            }
-
-            if let error = model.error {
-                Section {
-                    Label(error, systemImage: "exclamationmark.triangle")
-                        .foregroundStyle(.red)
-                }
-            }
-
-            Section("Counts") {
-                let counts = model.counts
-                LabeledContent("Total", value: counts.all.formatted())
-                LabeledContent("Enabled", value: counts.enabled.formatted())
-                LabeledContent("Project", value: counts.project.formatted())
-                LabeledContent("Global", value: counts.globalAndSystem.formatted())
-            }
-
-            if let budget = model.scan?.tokenBudget {
-                TokenBudgetSection(budget: budget)
-            }
-
-            Section("Updates") {
-                Button {
-                    model.updateProjectSkills()
-                } label: {
-                    Label("Update Project", systemImage: "arrow.down.circle")
-                }
-                .disabled(model.busy || model.scan?.projectPath == nil)
-
-                Button {
-                    model.updateGlobalSkills()
-                } label: {
-                    Label("Update Global", systemImage: "arrow.down.circle")
-                }
-                .disabled(model.busy)
-
-                if let result = model.updateResult {
-                    LabeledContent("Count", value: result.updateCount?.formatted() ?? "-")
-                    Text(result.output)
-                        .font(.system(.caption, design: .monospaced))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                SidebarSection("Project") {
+                    Text(model.scan?.projectPath ?? "Choose a project folder.")
+                        .font(.caption)
                         .foregroundStyle(.secondary)
-                        .lineLimit(8)
-                        .textSelection(.enabled)
+                        .lineLimit(3)
+                        .truncationMode(.middle)
                 }
-            }
 
-            Section("Skill Roots") {
-                ForEach(model.scan?.skillRoots ?? []) { root in
-                    VStack(alignment: .leading) {
-                        Label(root.label, systemImage: root.readonly ? "lock" : "folder")
-                        Text(root.path)
-                            .font(.caption)
+                if let error = model.error {
+                    SidebarSection(nil) {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .foregroundStyle(.red)
+                    }
+                }
+
+                SidebarSection("Counts") {
+                    let counts = model.counts
+                    SidebarValue("Total", counts.all.formatted())
+                    SidebarValue("Enabled", counts.enabled.formatted())
+                    SidebarValue("Project", counts.project.formatted())
+                    SidebarValue("Global", counts.globalAndSystem.formatted())
+                }
+
+                if let budget = model.scan?.tokenBudget {
+                    TokenBudgetSection(budget: budget)
+                }
+
+                SidebarSection("Updates") {
+                    Button {
+                        model.updateProjectSkills()
+                    } label: {
+                        Label("Update Project", systemImage: "arrow.down.circle")
+                    }
+                    .disabled(model.busy || model.scan?.projectPath == nil)
+
+                    Button {
+                        model.updateGlobalSkills()
+                    } label: {
+                        Label("Update Global", systemImage: "arrow.down.circle")
+                    }
+                    .disabled(model.busy)
+
+                    if let result = model.updateResult {
+                        SidebarValue("Count", result.updateCount?.formatted() ?? "-")
+                        Text(result.output)
+                            .font(.system(.caption, design: .monospaced))
                             .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                        Text(root.exists ? "Found" : "Missing")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .lineLimit(8)
+                            .textSelection(.enabled)
+                    }
+                }
+
+                SidebarSection("Skill Roots") {
+                    ForEach(model.scan?.skillRoots ?? []) { root in
+                        VStack(alignment: .leading) {
+                            Label(root.label, systemImage: root.readonly ? "lock" : "folder")
+                            Text(root.path)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(root.exists ? "Found" : "Missing")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
+            .padding()
         }
         .navigationTitle("Skills Manager")
+    }
+}
+
+struct SidebarSection<Content: View>: View {
+    var title: String?
+    @ViewBuilder var content: Content
+
+    init(_ title: String?, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let title {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct SidebarValue: View {
+    var label: String
+    var value: String
+
+    init(_ label: String, _ value: String) {
+        self.label = label
+        self.value = value
+    }
+
+    var body: some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -215,9 +272,9 @@ struct TokenBudgetSection: View {
     var budget: TokenBudget
 
     var body: some View {
-        Section("Codex Context") {
-            LabeledContent("Enabled", value: budget.enabledSkillCount.formatted())
-            LabeledContent("Tokens", value: budget.registryTokens.formatted())
+        SidebarSection("Codex Context") {
+            SidebarValue("Enabled", budget.enabledSkillCount.formatted())
+            SidebarValue("Tokens", budget.registryTokens.formatted())
 
             HStack {
                 ForEach(budget.models) { model in
@@ -260,6 +317,8 @@ struct SkillListView: View {
                         ForEach(model.filteredSkills) { skill in
                             SkillRow(skill: skill, busy: model.busy) {
                                 model.toggle(skill)
+                            } onDelete: {
+                                model.remove(skill)
                             }
                             Divider()
                         }
@@ -272,9 +331,12 @@ struct SkillListView: View {
 }
 
 struct SkillRow: View {
+    @State private var confirmingDelete = false
+
     var skill: Skill
     var busy: Bool
     var onToggle: () -> Void
+    var onDelete: () -> Void
 
     var body: some View {
         HStack {
@@ -306,6 +368,27 @@ struct SkillRow: View {
             .labelsHidden()
             .toggleStyle(.switch)
             .disabled(busy || skill.readonly)
+
+            Button(role: .destructive) {
+                confirmingDelete = true
+            } label: {
+                Label("Delete", systemImage: "trash")
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .disabled(busy || skill.readonly || skill.scope == .system)
+            .confirmationDialog(
+                "Delete \(skill.name)?",
+                isPresented: $confirmingDelete,
+                titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive) {
+                    onDelete()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Runs pnpx skills remove for this skill.")
+            }
         }
         .padding(.vertical, 4)
     }

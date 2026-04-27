@@ -107,6 +107,46 @@ final class SkillService: @unchecked Sendable {
         return parseUpdateOutput(output, command: "pnpx skills update --global")
     }
 
+    func removeSkill(_ skill: Skill) async throws -> UpdateResult {
+        if skill.readonly || skill.scope == .system {
+            throw SkillError.message("This skill root is read-only.")
+        }
+
+        let rootPath = standard(skill.rootPath)
+        let skillPath = standard(skill.path)
+
+        guard isInsideOrSame(parent: rootPath, child: skillPath) else {
+            throw SkillError.message("Invalid skill path.")
+        }
+        guard pathExistsNoFollow(skillPath) else {
+            throw SkillError.message("Skill folder no longer exists.")
+        }
+
+        let symlinks = try await findSkillSymlinks(skillPath: skillPath, rootPath: rootPath)
+        var removedSymlinks: [SkillSymlink] = []
+
+        do {
+            for link in symlinks {
+                try fileManager.removeItem(atPath: link.path)
+                removedSymlinks.append(link)
+            }
+            try fileManager.removeItem(atPath: skillPath)
+        } catch {
+            for link in removedSymlinks where !pathExistsNoFollow(link.path) {
+                try? fileManager.createSymbolicLink(atPath: link.path, withDestinationPath: link.linkTarget)
+            }
+            throw error
+        }
+
+        let output = "Removed \(skill.name)\nDeleted \(skillPath)\nRemoved \(removedSymlinks.count) symlink(s)."
+        return UpdateResult(
+            command: "native remove \(skillBaseName(skill.folderName))",
+            output: output,
+            updateCount: 1,
+            updates: []
+        )
+    }
+
     private struct Root {
         var label: String
         var path: String
@@ -383,6 +423,7 @@ final class SkillService: @unchecked Sendable {
             process.environment = env
 
             let pipe = Pipe()
+            process.standardInput = FileHandle.nullDevice
             process.standardOutput = pipe
             process.standardError = pipe
             process.terminationHandler = { proc in
