@@ -14,7 +14,7 @@ final class AppModel: ObservableObject {
     var filteredSkills: [Skill] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return (scan?.skills ?? []).filter { skill in
-            let matchesFilter = filter == .all || skill.scope.rawValue == filter.rawValue
+            let matchesFilter = filter == .all || filter == .conflicts || skill.scope.rawValue == filter.rawValue
             let matchesQuery = needle.isEmpty
                 || skill.name.lowercased().contains(needle)
                 || skill.description.lowercased().contains(needle)
@@ -33,6 +33,13 @@ final class AppModel: ObservableObject {
         )
     }
 
+    var visibleFilters: [SkillFilter] {
+        if scan?.projectPath == nil {
+            return SkillFilter.allCases.filter { $0 != .conflicts }
+        }
+        return SkillFilter.allCases
+    }
+
     func initialScan() {
         Task { await refresh(projectPath: nil) }
     }
@@ -40,6 +47,7 @@ final class AppModel: ObservableObject {
     func refresh(projectPath: String? = nil) async {
         await runBusy { [self] in
             self.scan = try await self.service.scanProject(projectPath ?? self.scan?.projectPath)
+            self.normalizeFilter()
         }
     }
 
@@ -49,6 +57,7 @@ final class AppModel: ObservableObject {
             await runBusy { [self] in
                 self.scan = try await self.service.scanProject(selected)
                 self.updateResult = nil
+                self.normalizeFilter()
             }
         }
     }
@@ -109,6 +118,12 @@ final class AppModel: ObservableObject {
             self.error = error.localizedDescription
         }
         busy = false
+    }
+
+    private func normalizeFilter() {
+        if scan?.projectPath == nil && filter == .conflicts {
+            filter = .all
+        }
     }
 }
 
@@ -174,6 +189,9 @@ struct SidebarView: View {
                     SidebarValue("Enabled", counts.enabled.formatted())
                     SidebarValue("Project", counts.project.formatted())
                     SidebarValue("Global", counts.globalAndSystem.formatted())
+                    if model.scan?.projectPath != nil {
+                        SidebarValue("Conflicts", (model.scan?.conflicts.count ?? 0).formatted())
+                    }
                 }
 
                 if let budget = model.scan?.tokenBudget {
@@ -294,14 +312,18 @@ struct SkillListView: View {
     var body: some View {
         VStack(spacing: 0) {
             Picker("Type", selection: $model.filter) {
-                ForEach(SkillFilter.allCases) { filter in
+                ForEach(model.visibleFilters) { filter in
                     Text(filter.label).tag(filter)
                 }
             }
             .pickerStyle(.segmented)
             .padding()
 
-            if model.filteredSkills.isEmpty {
+            if model.filter == .conflicts {
+                ConflictsView(conflicts: model.scan?.conflicts ?? [], busy: model.busy) { skill in
+                    model.toggle(skill)
+                }
+            } else if model.filteredSkills.isEmpty {
                 ContentUnavailableView("No Skills", systemImage: "square.stack.3d.up.slash")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -396,5 +418,122 @@ struct SkillRow: View {
             }
         }
         .padding(.vertical, 4)
+    }
+}
+
+struct ConflictsView: View {
+    var conflicts: [SkillConflict]
+    var busy: Bool
+    var onToggle: (Skill) -> Void
+
+    var body: some View {
+        if conflicts.isEmpty {
+            ContentUnavailableView("No Conflicts", systemImage: "checkmark.circle")
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(conflicts) { conflict in
+                        ConflictRow(conflict: conflict, busy: busy, onToggle: onToggle)
+                        Divider()
+                    }
+                }
+                .padding(.horizontal)
+            }
+        }
+    }
+}
+
+struct ConflictRow: View {
+    var conflict: SkillConflict
+    var busy: Bool
+    var onToggle: (Skill) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label(conflict.name, systemImage: "exclamationmark.triangle")
+                    .font(.headline)
+                Spacer()
+                Text("\(conflict.projectSkills.count) project, \(conflict.globalSkills.count) global")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(alignment: .top, spacing: 18) {
+                ConflictGroup(title: "Project", skills: conflict.projectSkills, busy: busy, onToggle: onToggle)
+                ConflictGroup(title: "Global", skills: conflict.globalSkills, busy: busy, onToggle: onToggle)
+            }
+        }
+        .padding(.vertical, 12)
+    }
+}
+
+struct ConflictGroup: View {
+    var title: String
+    var skills: [Skill]
+    var busy: Bool
+    var onToggle: (Skill) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+            }
+
+            ForEach(skills) { skill in
+                ConflictSkillRow(skill: skill, busy: busy) {
+                    onToggle(skill)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+struct ConflictSkillRow: View {
+    var skill: Skill
+    var busy: Bool
+    var onToggle: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(skill.rootLabel)
+                        .font(.callout.weight(.medium))
+                    if !skill.enabled {
+                        Text("Disabled")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if skill.readonly {
+                        Text("Read-only")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text(skill.path)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+            }
+
+            Spacer()
+
+            Toggle("", isOn: Binding(
+                get: { skill.enabled },
+                set: { _ in onToggle() }
+            ))
+            .labelsHidden()
+            .toggleStyle(.switch)
+            .disabled(busy || skill.readonly)
+        }
     }
 }

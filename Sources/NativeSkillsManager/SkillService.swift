@@ -26,7 +26,7 @@ final class SkillService: @unchecked Sendable {
     func scanProject(_ projectPath: String?) async throws -> ScanResult {
         let normalizedProject = projectPath.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
         let roots = skillRoots(projectPath: normalizedProject)
-        let skills = try await withThrowingTaskGroup(of: [Skill].self) { group in
+        let scannedSkills = try await withThrowingTaskGroup(of: [Skill].self) { group in
             for root in roots {
                 group.addTask { try await self.scanSkillRoot(root) }
             }
@@ -36,6 +36,7 @@ final class SkillService: @unchecked Sendable {
             }
             return all.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         }
+        let skills = dedupeSkillRows(scannedSkills)
 
         return ScanResult(
             projectPath: normalizedProject,
@@ -49,6 +50,7 @@ final class SkillService: @unchecked Sendable {
                 )
             },
             skills: skills,
+            conflicts: normalizedProject == nil ? [] : findNameConflicts(scannedSkills),
             tokenBudget: countSkillRegistryTokens(skills)
         )
     }
@@ -190,7 +192,7 @@ final class SkillService: @unchecked Sendable {
         let enabled = try scanSkillDirectory(root: root, directory: root.path, enabled: true)
         let disabled = try scanSkillDirectory(root: root, directory: disabledRoot(root.path), enabled: false)
         let legacy = try scanLegacyDisabledSkillDirectory(root)
-        return dedupeSkillRows(enabled + disabled + legacy)
+        return (enabled + disabled + legacy).sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private func scanSkillDirectory(root: Root, directory: String, enabled: Bool) throws -> [Skill] {
@@ -253,6 +255,29 @@ final class SkillService: @unchecked Sendable {
             }
         }
         return byName.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private func findNameConflicts(_ skills: [Skill]) -> [SkillConflict] {
+        let projectByName = Dictionary(grouping: skills.filter { $0.scope == .project }) {
+            skillBaseName($0.folderName).lowercased()
+        }
+        let globalByName = Dictionary(grouping: skills.filter { $0.scope == .global }) {
+            skillBaseName($0.folderName).lowercased()
+        }
+
+        return projectByName.keys
+            .filter { globalByName[$0]?.isEmpty == false }
+            .compactMap { key in
+                guard let projectSkills = projectByName[key], let globalSkills = globalByName[key] else {
+                    return nil
+                }
+                return SkillConflict(
+                    name: projectSkills.first?.name ?? globalSkills.first?.name ?? key,
+                    projectSkills: projectSkills,
+                    globalSkills: globalSkills
+                )
+            }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 
     private func countSkillRegistryTokens(_ skills: [Skill]) -> TokenBudget {

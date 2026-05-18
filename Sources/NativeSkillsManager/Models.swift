@@ -21,6 +21,7 @@ enum SkillFilter: String, CaseIterable, Identifiable {
     case project
     case global
     case system
+    case conflicts
 
     var id: String { rawValue }
 
@@ -30,6 +31,7 @@ enum SkillFilter: String, CaseIterable, Identifiable {
         case .project: "Project"
         case .global: "Global"
         case .system: "System"
+        case .conflicts: "Conflicts"
         }
     }
 }
@@ -60,7 +62,16 @@ struct ScanResult {
     var projectPath: String?
     var skillRoots: [SkillRoot]
     var skills: [Skill]
+    var conflicts: [SkillConflict]
     var tokenBudget: TokenBudget
+}
+
+struct SkillConflict: Identifiable, Hashable {
+    var name: String
+    var projectSkills: [Skill]
+    var globalSkills: [Skill]
+
+    var id: String { name.lowercased() }
 }
 
 struct TokenBudget {
