@@ -2,14 +2,21 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
+    private let recentProjectsKey = "recentProjects"
+
     @Published var scan: ScanResult?
     @Published var query = ""
     @Published var filter: SkillFilter = .all
     @Published var updateResult: UpdateResult?
+    @Published var recentProjects: [String]
     @Published var busy = false
     @Published var error: String?
 
     let service = SkillService()
+
+    init() {
+        recentProjects = UserDefaults.standard.stringArray(forKey: recentProjectsKey) ?? []
+    }
 
     var filteredSkills: [Skill] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -53,10 +60,15 @@ final class AppModel: ObservableObject {
 
     func selectProject() {
         guard let selected = service.selectFolder(title: "Select project folder") else { return }
+        openProject(selected)
+    }
+
+    func openProject(_ path: String) {
         Task {
             await runBusy { [self] in
-                self.scan = try await self.service.scanProject(selected)
+                self.scan = try await self.service.scanProject(path)
                 self.updateResult = nil
+                self.rememberProject(path)
                 self.normalizeFilter()
             }
         }
@@ -125,6 +137,14 @@ final class AppModel: ObservableObject {
             filter = .all
         }
     }
+
+    private func rememberProject(_ path: String) {
+        let normalized = URL(fileURLWithPath: path).standardizedFileURL.path
+        recentProjects.removeAll { $0 == normalized }
+        recentProjects.insert(normalized, at: 0)
+        recentProjects = Array(recentProjects.prefix(5))
+        UserDefaults.standard.set(recentProjects, forKey: recentProjectsKey)
+    }
 }
 
 struct ContentView: View {
@@ -169,11 +189,15 @@ struct SidebarView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 SidebarSection("Project") {
-                    Text(model.scan?.projectPath ?? "Choose a project folder.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(3)
-                        .truncationMode(.middle)
+                    if let projectPath = model.scan?.projectPath {
+                        Text(projectPath)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(3)
+                            .truncationMode(.middle)
+                    } else {
+                        RecentProjectsMenu(model: model)
+                    }
                 }
 
                 if let error = model.error {
@@ -276,6 +300,40 @@ struct SidebarValue: View {
             Text(value)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+struct RecentProjectsMenu: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Menu {
+            if model.recentProjects.isEmpty {
+                Text("No Recent Projects")
+            } else {
+                ForEach(model.recentProjects, id: \.self) { path in
+                    Button {
+                        model.openProject(path)
+                    } label: {
+                        Text(URL(fileURLWithPath: path).lastPathComponent)
+                    }
+                }
+                Divider()
+            }
+
+            Button {
+                model.selectProject()
+            } label: {
+                Label("Choose Project...", systemImage: "folder")
+            }
+        } label: {
+            Label("Choose a project folder.", systemImage: "folder")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+        .menuStyle(.button)
+        .disabled(model.busy)
     }
 }
 
