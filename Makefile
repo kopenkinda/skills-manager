@@ -59,3 +59,7 @@ package: app
 clean:
 	rm -rf "$(DIST_DIR)"
 	swift package clean
+
+app-and-copy: app
+	sudo cp -R "$(APP)" "/Applications/$(APP_NAME).app"
+	sudo chown -R root:wheel "/Applications/$(APP_NAME).app"

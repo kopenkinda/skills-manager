@@ -311,13 +311,8 @@ struct SkillListView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Type", selection: $model.filter) {
-                ForEach(model.visibleFilters) { filter in
-                    Text(filter.label).tag(filter)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding()
+            FinderTabStrip(filters: model.visibleFilters, selection: $model.filter)
+                .padding()
 
             if model.filter == .conflicts {
                 ConflictsView(conflicts: model.scan?.conflicts ?? [], busy: model.busy) { skill in
@@ -344,6 +339,44 @@ struct SkillListView: View {
                 }
             }
         }
+    }
+}
+
+struct FinderTabStrip: View {
+    var filters: [SkillFilter]
+    @Binding var selection: SkillFilter
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(filters) { filter in
+                Button {
+                    selection = filter
+                } label: {
+                    Text(filter.label)
+                        .font(.system(size: 14, weight: selection == filter ? .semibold : .regular))
+                        .lineLimit(1)
+                        .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 5)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .background {
+                    if selection == filter {
+                        Capsule()
+                            .fill(.ultraThinMaterial)
+                            .overlay(Capsule().fill(.white.opacity(0.08)))
+                            .overlay(Capsule().stroke(.white.opacity(0.22), lineWidth: 1))
+                            .shadow(color: .black.opacity(0.16), radius: 1, y: 1)
+                    }
+                }
+            }
+        }
+        .padding(2)
+        .background(.black.opacity(0.08), in: Capsule())
+        .overlay(Capsule().stroke(.white.opacity(0.05), lineWidth: 1))
+        .frame(maxWidth: 720)
     }
 }
 
