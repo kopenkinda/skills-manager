@@ -9,8 +9,11 @@ APP := $(DIST_DIR)/$(APP_NAME).app
 CONTENTS := $(APP)/Contents
 MACOS := $(CONTENTS)/MacOS
 RESOURCES := $(CONTENTS)/Resources
+INSTALL_DIR ?= /Applications
+INSTALLED_APP := $(INSTALL_DIR)/$(APP_NAME).app
+SUDO ?= sudo
 
-.PHONY: build app package clean
+.PHONY: build app package app-and-copy clean
 
 build:
 	swift build -c release
@@ -61,5 +64,7 @@ clean:
 	swift package clean
 
 app-and-copy: app
-	sudo cp -R "$(APP)" "/Applications/$(APP_NAME).app"
-	sudo chown -R root:wheel "/Applications/$(APP_NAME).app"
+	osascript -e 'tell application "$(APP_NAME)" to quit' >/dev/null 2>&1 || true
+	$(SUDO) rm -rf "$(INSTALLED_APP)"
+	$(SUDO) ditto "$(APP)" "$(INSTALLED_APP)"
+	codesign --verify --deep --strict --verbose=2 "$(INSTALLED_APP)"
